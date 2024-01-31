@@ -1,20 +1,3 @@
-/**
-	@file
-	plussz.c - one of the simplest max objects you can make -rdd 2001
-	(plussz is/was the name of a Hungarian vitamin C tablet-drink from the early 90s)
-
-	this example is provided for musicians who want to learn to write their own Max externals but who only
-	have rudimentary computer programming skills and feel somewhat overwhelmed by the other examples in the Max SDK
-
-	this object has 2 inlets and one outlet
-	it responds to ints in its inlets and the 'bang' message in the left inlet
-	it responds to the 'assistance' message sent by Max when the mouse is positioned over an inlet or outlet
-		(including an assistance method is optional, but strongly sugggested)
-	it adds its input values together and outputs their sum
-
-	@ingroup	examples
-*/
-
 #include "ext.h"			// you must include this - it contains the external object's link to available Max functions
 #include "ext_obex.h"		// this is required for all objects using the newer style for writing objects.
 
@@ -24,13 +7,15 @@ typedef struct _avgsnapper {	// defines our object's internal variables for each
 	long p_value1;			// int value - received from the middle inlet and stored internally for each object instance
     t_atom* p_list;            // list - received from the right inlet and stored internally for each object instance
 	void *p_outlet;			// outlet creation - inlets are automatic, but objects must "own" their own outlets
+	void *proxy;			// proxy inlet
+	void *proxy_two;			// proxy inlet
+	long proxy_inletnum;	// # of inlet currently in use
 } t_avgsnapper;
 
 
 // these are prototypes for the methods that are defined below
 void avgsnapper_bang(t_avgsnapper *x);
 void avgsnapper_int(t_avgsnapper *x, long n);
-void avgsnapper_in1(t_avgsnapper *x, long n);
 void avgsnapper_list(t_avgsnapper *x, t_symbol *s, long argc, t_atom *argv);
 void avgsnapper_assist(t_avgsnapper *x, void *b, long m, long a, char *s);
 void *avgsnapper_new();
@@ -51,7 +36,7 @@ void ext_main(void *r)
 
 	class_addmethod(c, (method)avgsnapper_bang,		"bang",		0);			// the method it uses when it gets a bang in the left inlet
 	class_addmethod(c, (method)avgsnapper_int,		"int",		A_LONG, 0);	// the method for an int in the left inlet (inlet 0)
-	class_addmethod(c, (method)avgsnapper_in1,		"in1",		A_LONG, 0);	// the method for an int in the middle inlet (inlet 1)
+	
     class_addmethod(c, (method)avgsnapper_list,		"list",		A_GIMME, 0);	// the method for a list in the right inlet (inlet 2)
 	// "ft1" is the special message for floats
 	class_addmethod(c, (method)avgsnapper_assist,	"assist",	A_CANT, 0);	// (optional) assistance method needs to be declared like this
@@ -71,16 +56,22 @@ void *avgsnapper_new()		// n = int argument typed into object box (A_DEFLONG) --
 
 	x = (t_avgsnapper *)object_alloc(avgsnapper_class); // create a new instance of this object
 
-	intin(x,1);					// create a second int inlet (leftmost inlet is automatic - all objects have one inlet by default)
-    inlet_new(x, NULL);				// create a third list inlet -- replace this w a proxy
-	x->p_outlet = intout(x);	// create an int outlet and assign it to our outlet variable in the instance's data structure
+	if (x)
+	{
+		// why do i need to define proxy_two first in order to get the expected ordering?
+		x->proxy_two = proxy_new(x, 2, &x->proxy_inletnum);	// fully-flexible inlet for any type
+		x->proxy = proxy_new(x, 1, &x->proxy_inletnum);	// fully-flexible inlet for any type
 
-	x->p_value0	= 0;			// set initial (default) left operand value in the instance's data structure
-	x->p_value1	= 0;			// set initial (default) middle operand value 
+		x->p_outlet = intout(x);	// create an int outlet and assign it to our outlet variable in the instance's data structure
 
-    // x->p_list = ;           // set initial (default) right operand value (n1 = variable passed to avgsnapper_new)
+		x->p_value0	= 0;			// set initial (default) left operand value in the instance's data structure
+		x->p_value1	= 0;			// set initial (default) middle operand value 
+
+    	// x->p_list = ;           // set initial (default) right operand value (n1 = variable passed to avgsnapper_new)
 
 	post(" new avgsnapper object instance added to patch...",0); // post important info to the max window when new instance is created
+	}
+	
 
 	return(x);					// return a reference to the object instance
 }
@@ -119,15 +110,20 @@ void avgsnapper_bang(t_avgsnapper *x)	// x = reference to this instance of the o
 
 void avgsnapper_int(t_avgsnapper *x, long n)	// x = the instance of the object; n = the int received in the left inlet
 {
-	x->p_value0 = n;					        // store left operand value in instance's data structure
-	avgsnapper_bang(x);						    // ... call the bang method to sum and send out our outlet
+	long inlet = proxy_getinlet((t_object *)x); // what inlet did this message come in through?
+
+	post("int came in via inlet %ld", inlet);
+
+	if (inlet == 1) { // RIGHT INLET
+		x->p_value1 = n; // SET INT VAL
+	}
+	else { // LEFT INLET
+		x->p_value0 = n;
+		avgsnapper_bang(x); // bang for left inlet, trigger calculation
+	}					    
 }
 
 
-void avgsnapper_in1(t_avgsnapper *x, long n)	// x = the instance of the object, n = the int received in the middle inlet
-{
-	x->p_value1 = n;					        // just store middle operand value in instance's data structure and do nothing else
-}
 
 void avgsnapper_list(t_avgsnapper *x, t_symbol *s, long argc, t_atom *argv)	// x = the instance of the object, argc = number of atoms in the list, argv = the list
 {
@@ -136,6 +132,10 @@ void avgsnapper_list(t_avgsnapper *x, t_symbol *s, long argc, t_atom *argv)	// x
  
     post("message selector is %s",s->s_name);
     post("there are %ld arguments",argc);
+
+	long inlet = proxy_getinlet((t_object *)x); // what inlet did this message come in through?
+
+	post("list came in via inlet %ld", inlet);
  
     // increment ap each time to get to the next atom
     for (i = 0, ap = argv; i < argc; i++, ap++) {
